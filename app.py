@@ -162,7 +162,7 @@ def ask(question: str):
 
 # --- Streamlit UI ---
 st.set_page_config(layout="wide")
-st.title("Conversational Analytics Bot (Human Capital)")
+st.title("Human Capital Analytics Bot")
 st.write("Ajukan pertanyaan tentang data karyawan, pelatihan, dan pendaftaran dalam bahasa natural.")
 
 # Initialize chat history
