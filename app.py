@@ -61,14 +61,24 @@ def generate_sql(question: str) -> str:
     try:
         prompt = build_prompt(question)
         resp = model.generate_content(prompt)
-        sql = resp.text.strip()
-        if sql.startswith("```sql") and sql.endswith("```"):
-            sql = sql[len("```sql"):-len("```")].strip()
-        elif sql.startswith("```") and sql.endswith("```"):
-            sql = sql[len("```"):-len("```")].strip()
-        return sql
+        # Check if the response contains any text content
+        if resp and resp.candidates and len(resp.candidates) > 0 and resp.candidates[0].content and resp.candidates[0].content.parts and len(resp.candidates[0].content.parts) > 0:
+            sql = resp.candidates[0].content.parts[0].text.strip()
+            # Clean up markdown code block if present
+            if sql.startswith("```sql") and sql.endswith("```"):
+                sql = sql[len("```sql"):-len("```")].strip()
+            elif sql.startswith("```") and sql.endswith("```"):
+                sql = sql[len("```"):-len("```")].strip()
+            return sql
+        else:
+            # Log the reason for no content, e.g., safety block
+            if resp and resp.prompt_feedback and resp.prompt_feedback.block_reason:
+                st.warning(f"Model response blocked for question: '{question}' due to: {resp.prompt_feedback.block_reason}. Returning empty SQL.")
+            else:
+                st.warning(f"Model did not return any text content for question: '{question}'. Returning empty SQL.")
+            return ""
     except Exception as e:
-        st.error(f"Error generating SQL: {e}")
+        st.error(f"Error generating SQL: {e}. Returning empty SQL.")
         return ""
 
 # TODO 4: validate_sql
@@ -82,7 +92,7 @@ def validate_sql(sql: str) -> bool:
     for keyword in FORBIDDEN:
         if keyword in sql_lower:
             return False
-    if ';' in sql_lower[:-1]:
+    if ";" in sql_lower[:-1]:
         return False
     return True
 
