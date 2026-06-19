@@ -6,13 +6,29 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from sqlalchemy import create_engine, text
 
-st.set_page_config(page_title="Human Capital Analytics", page_icon="🔌")
-st.title("🔌 Human Capital Analytics — Chatbot Text-to-SQL")
+st.set_page_config(page_title="Human Capital Analytics")
+st.title("Human Capital Analytics — Chatbot Text-to-SQL")
 st.caption("Tanya data SDM dengan bahasa biasa → SQL → jawaban + grafik")
 
-# ---- DB: pakai PostgreSQL miniproject yang sudah dimuat ----
+# ---- DB: PostgreSQL miniproject yang sudah dimuat di notebook ----
+# Catatan: di Colab, PostgreSQL kadang perlu di-start ulang sebelum app dijalankan:
+#   !service postgresql start
 DB_URL = os.environ.get("DB_URL", "postgresql+psycopg2://postgres:postgres@localhost:5432/miniproject")
-engine = create_engine(DB_URL)
+
+@st.cache_resource
+def get_engine():
+    eng = create_engine(DB_URL, pool_pre_ping=True)
+    with eng.connect() as c:           # tes koneksi sekali di awal
+        c.execute(text("SELECT 1"))
+    return eng
+
+try:
+    engine = get_engine()
+    DB_OK = True
+except Exception as e:
+    engine = None
+    DB_OK = False
+    DB_ERR = str(e)
 
 SCHEMA_STR = """employees(nip, nama, divisi, jabatan, join_date)
 trainings(training_id, nama_diklat, tanggal)
@@ -25,6 +41,17 @@ if GEMINI_API_KEY:
     import google.generativeai as genai
     genai.configure(api_key=GEMINI_API_KEY)
     model = genai.GenerativeModel("gemini-2.5-flash")
+
+# ---- deteksi sapaan / basa-basi (tidak menyentuh DB) ----
+SAPAAN = ("halo", "hai", "hi", "hello", "pagi", "siang", "sore", "malam",
+          "terima kasih", "makasih", "thanks", "siapa kamu", "apa kabar", "test", "tes")
+def is_sapaan(teks):
+    t = teks.lower().strip()
+    return (len(t.split()) <= 3) and any(s in t for s in SAPAAN)
+
+SAPAAN_BALAS = ("Halo! 👋 Saya asisten analitik data SDM. "
+                "Coba tanya, misalnya: *Berapa jumlah pegawai per divisi?* atau "
+                "*Berapa rata-rata nilai diklat per divisi?*")
 
 def build_prompt(q):
     return (f"Anda ahli SQL PostgreSQL. Gunakan HANYA skema berikut.\n"
@@ -72,6 +99,15 @@ def chart(df):
     ax.set_ylabel(str(y)); plt.xticks(rotation=30, ha="right"); plt.tight_layout()
     return fig
 
+with st.sidebar:
+    st.subheader("Status")
+    st.write("DB:", "🟢 terhubung" if DB_OK else "🔴 gagal")
+    st.write("LLM:", "DEMO (mock)" if USE_MOCK else "Gemini")
+    if not DB_OK:
+        st.caption("Jalankan `!service postgresql start` di notebook, lalu restart app.")
+    if st.button("Reset percakapan"):
+        st.session_state.messages = []; st.rerun()
+
 if "messages" not in st.session_state:
     st.session_state.messages = []
 for m in st.session_state.messages:
@@ -82,18 +118,27 @@ if q:
     st.session_state.messages.append({"role":"user","content":q})
     with st.chat_message("user"): st.write(q)
     with st.chat_message("assistant"):
-        sql = generate_sql(q)
-        if not validate_sql(sql):
-            sql = generate_sql(q + " (hanya SELECT valid)")
-        if not validate_sql(sql):
-            st.error("Query valid tidak dapat disusun. Perjelas pertanyaan.")
+        # 1) sapaan -> balas ramah, jangan sentuh DB
+        if is_sapaan(q):
+            st.write(SAPAAN_BALAS)
+            st.session_state.messages.append({"role":"assistant","content":SAPAAN_BALAS})
+        elif not DB_OK:
+            msg = f"Database belum terhubung sehingga query tidak bisa dijalankan.\n\n`{DB_ERR}`"
+            st.error(msg)
+            st.session_state.messages.append({"role":"assistant","content":msg})
         else:
-            try:
-                df = run_sql(sql)
-                with st.expander("🔎 SQL"): st.code(sql, language="sql")
-                st.dataframe(df, use_container_width=True)
-                fig = chart(df)
-                if fig: st.pyplot(fig)
-                st.session_state.messages.append({"role":"assistant","content":f"{len(df)} baris."})
-            except Exception as e:
-                st.error(f"Gagal eksekusi: {e}")
+            sql = generate_sql(q)
+            if not validate_sql(sql):
+                sql = generate_sql(q + " (hanya SELECT valid)")
+            if not validate_sql(sql):
+                st.error("Query valid tidak dapat disusun. Coba perjelas pertanyaan.")
+            else:
+                try:
+                    df = run_sql(sql)
+                    with st.expander("🔎 SQL"): st.code(sql, language="sql")
+                    st.dataframe(df, use_container_width=True)
+                    fig = chart(df)
+                    if fig: st.pyplot(fig)
+                    st.session_state.messages.append({"role":"assistant","content":f"{len(df)} baris."})
+                except Exception as e:
+                    st.error(f"Gagal eksekusi: {e}")
